@@ -369,10 +369,15 @@ const benchmarks = [
   },
 ];
 
+const sharePointBatchEndpoint = String(window.SHAREPOINT_BATCH_ENDPOINT || "").trim();
+const sharePointFolderUrl = String(window.SHAREPOINT_FOLDER_URL || "").trim();
+const sharePointWorkbookName = String(window.SHAREPOINT_WORKBOOK_NAME || "Autodiagnostico_Tributario_IA_2030_Respuestas.xls").trim();
+
 const state = {
   answers: {},
   data: {},
   generated: false,
+  finalized: false,
 };
 
 const els = {
@@ -388,6 +393,7 @@ const els = {
   resetButton: document.getElementById("resetButton"),
   exportPdfButton: document.getElementById("exportPdfButton"),
   exportButton: document.getElementById("exportButton"),
+  batchStatus: document.getElementById("batchStatus"),
   radarChart: document.getElementById("radarChart"),
   chartLegend: document.getElementById("chartLegend"),
   globalResult: document.getElementById("globalResult"),
@@ -463,6 +469,298 @@ function scores() {
   return { axisScores, completed, total, global };
 }
 
+function contactData() {
+  return {
+    respondentName: String(state.data.respondentName || "").trim(),
+    organization: String(state.data.organization || "").trim(),
+    respondentEmail: String(state.data.respondentEmail || "").trim(),
+    adminName: String(state.data.adminName || "").trim(),
+    adminType: String(state.data.adminType || "").trim(),
+    assessmentDate: String(state.data.assessmentDate || "").trim(),
+  };
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function contactValidation() {
+  const contact = contactData();
+  const missing = [];
+  if (!contact.respondentName) missing.push("nombre y apellidos");
+  if (!contact.organization) missing.push("organización");
+  if (!contact.respondentEmail) missing.push("correo electrónico");
+  if (contact.respondentEmail && !isValidEmail(contact.respondentEmail)) missing.push("correo electrónico válido");
+  return { ok: missing.length === 0, missing, contact };
+}
+
+function setBatchStatus(message, kind = "") {
+  if (!els.batchStatus) return;
+  els.batchStatus.textContent = message;
+  els.batchStatus.classList.toggle("is-success", kind === "success");
+  els.batchStatus.classList.toggle("is-error", kind === "error");
+}
+
+function updateGenerateState() {
+  const current = scores();
+  const contact = contactValidation();
+  els.generateButton.disabled = state.finalized || current.completed !== current.total || !contact.ok;
+
+  if (state.finalized) {
+    setBatchStatus("Registro completado. Cambia algún dato o respuesta para generar un nuevo registro.", "success");
+  } else if (current.completed !== current.total) {
+    setBatchStatus(`Responde las 15 preguntas para generar y registrar resultados.`);
+  } else if (!contact.ok) {
+    setBatchStatus(`Completa los datos de contacto: ${contact.missing.join(", ")}.`, "error");
+  } else if (!state.generated) {
+    setBatchStatus("Listo para generar resultados y registrar la respuesta en el Excel.", "");
+  }
+}
+
+function answerRows() {
+  return axes.flatMap((axis) =>
+    axis.questions.map((question, index) => {
+      const score = state.answers[question.id];
+      const option = Number.isFinite(score) ? question.options[score - 1] : "";
+      return {
+        axisId: axis.id,
+        axisNumber: axis.number,
+        axisTitle: axis.title,
+        questionNumber: `${axis.number}.${String(index + 1).padStart(2, "0")}`,
+        questionId: question.id,
+        question: question.text,
+        score: Number.isFinite(score) ? score : "",
+        maturity: Number.isFinite(score) ? maturityScale[score - 1] : "",
+        answer: option || "",
+      };
+    })
+  );
+}
+
+function buildBatchPayload() {
+  const current = scores();
+  const level = current.completed === current.total ? globalLevel(current.global) : { name: "Pendiente", description: "Diagnóstico no completado." };
+  const contact = contactData();
+  const submittedAt = new Date().toISOString();
+  const axisResults = axes.map((axis) => {
+    const score = current.axisScores[axis.id];
+    const levelInfo = axisLevel(axis, score || 1);
+    return {
+      axisId: axis.id,
+      axisNumber: axis.number,
+      axisTitle: axis.title,
+      score,
+      scoreFormatted: formatScore(score),
+      maturity: levelInfo.name,
+      description: levelInfo.description,
+    };
+  });
+
+  const payload = {
+    schemaVersion: "pti2030-sharepoint-batch-v1",
+    submittedAt,
+    sharePoint: {
+      folderUrl: sharePointFolderUrl,
+      workbookName: sharePointWorkbookName,
+      operation: "create-workbook-if-missing-then-append-row",
+      worksheetName: "Respuestas",
+      detailWorksheetName: "DetalleRespuestas",
+    },
+    contact,
+    assessment: {
+      title: "Autodiagnóstico de Madurez · Administraciones Tributarias Inteligentes 2030",
+      completedQuestions: current.completed,
+      totalQuestions: current.total,
+      globalScore: current.global,
+      globalScoreFormatted: formatScore(current.global),
+      globalMaturity: level.name,
+      globalDescription: level.description,
+      interpretation: buildInterpretation(current),
+    },
+    axisResults,
+    answers: answerRows(),
+  };
+
+  payload.row = buildRegisterRow(payload);
+
+  const fallbackName = safeFileName(`${contact.organization || contact.adminName || "cliente"}_respaldo_autodiagnostico_tributario_ia_2030`);
+  payload.excel = {
+    fileName: `${fallbackName}.xls`,
+    mimeType: "application/vnd.ms-excel",
+    html: buildExcelHtml(payload),
+  };
+
+  return payload;
+}
+
+function buildRegisterRow(payload) {
+  const row = {
+    submittedAt: payload.submittedAt,
+    respondentName: payload.contact.respondentName,
+    organization: payload.contact.organization,
+    respondentEmail: payload.contact.respondentEmail,
+    adminName: payload.contact.adminName,
+    adminType: payload.contact.adminType,
+    assessmentDate: payload.contact.assessmentDate,
+    globalScore: payload.assessment.globalScoreFormatted,
+    globalMaturity: payload.assessment.globalMaturity,
+  };
+
+  payload.axisResults.forEach((axis) => {
+    row[`${axis.axisId}_score`] = axis.scoreFormatted;
+    row[`${axis.axisId}_maturity`] = axis.maturity;
+  });
+
+  payload.answers.forEach((answer) => {
+    row[`${answer.questionId}_score`] = answer.score;
+    row[`${answer.questionId}_answer`] = answer.answer;
+  });
+
+  return row;
+}
+
+function safeFileName(value) {
+  return String(value || "autodiagnostico")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 90);
+}
+
+function tableRows(rows) {
+  return rows
+    .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`)
+    .join("");
+}
+
+function buildExcelHtml(payload) {
+  const registerHeaders = Object.keys(payload.row);
+  const registerRows = [registerHeaders, registerHeaders.map((key) => payload.row[key])];
+
+  const contactRows = [
+    ["Campo", "Valor"],
+    ["Fecha de envío", payload.submittedAt],
+    ["Nombre y apellidos", payload.contact.respondentName],
+    ["Organización", payload.contact.organization],
+    ["Correo electrónico", payload.contact.respondentEmail],
+    ["Administración evaluada", payload.contact.adminName],
+    ["Tipo de administración", payload.contact.adminType],
+    ["Fecha del autodiagnóstico", payload.contact.assessmentDate],
+  ];
+
+  const summaryRows = [
+    ["Indicador", "Valor"],
+    ["Resultado global", payload.assessment.globalScoreFormatted],
+    ["Madurez global", payload.assessment.globalMaturity],
+    ["Lectura automática", payload.assessment.interpretation],
+  ];
+
+  const axisRows = [
+    ["Eje", "Puntuación", "Madurez", "Descripción"],
+    ...payload.axisResults.map((axis) => [axis.axisTitle, axis.scoreFormatted, axis.maturity, axis.description]),
+  ];
+
+  const answerTableRows = [
+    ["Eje", "Número", "Pregunta", "Puntuación", "Nivel", "Respuesta seleccionada"],
+    ...payload.answers.map((answer) => [answer.axisTitle, answer.questionNumber, answer.question, answer.score, answer.maturity, answer.answer]),
+  ];
+
+  return `
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <style>
+          body { font-family: Arial, sans-serif; }
+          h1 { color: #0072bc; }
+          h2 { margin-top: 24px; color: #0072bc; }
+          table { border-collapse: collapse; width: 100%; margin-bottom: 18px; }
+          td { border: 1px solid #c9d3df; padding: 8px; vertical-align: top; }
+          tr:first-child td { background: #0072bc; color: #fff; font-weight: bold; }
+        </style>
+      </head>
+      <body>
+        <h1>${escapeHtml(payload.assessment.title)}</h1>
+        <h2>Registro para base de datos</h2>
+        <table>${tableRows(registerRows)}</table>
+        <h2>Información de contacto</h2>
+        <table>${tableRows(contactRows)}</table>
+        <h2>Resumen ejecutivo</h2>
+        <table>${tableRows(summaryRows)}</table>
+        <h2>Resultados por eje</h2>
+        <table>${tableRows(axisRows)}</table>
+        <h2>Respuestas del autodiagnóstico</h2>
+        <table>${tableRows(answerTableRows)}</table>
+      </body>
+    </html>
+  `;
+}
+
+function downloadExcel(payload) {
+  const blob = new Blob([payload.excel.html], { type: `${payload.excel.mimeType};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = payload.excel.fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function registerAssessmentResult() {
+  const current = scores();
+  const contact = contactValidation();
+
+  if (current.completed !== current.total) {
+    showToast("Completa las 15 preguntas antes de registrar.");
+    return;
+  }
+
+  if (!contact.ok) {
+    showToast(`Completa los datos de contacto: ${contact.missing.join(", ")}.`);
+    document.getElementById("datos").scrollIntoView({ behavior: "smooth", block: "start" });
+    setBatchStatus(`Faltan datos de contacto: ${contact.missing.join(", ")}.`, "error");
+    return;
+  }
+
+  const payload = buildBatchPayload();
+  setBatchStatus("Preparando lote de respuestas y Excel...", "");
+
+  if (!sharePointBatchEndpoint) {
+    downloadExcel(payload);
+    state.finalized = true;
+    updateGenerateState();
+    setBatchStatus("Endpoint de automatización no configurado. Se ha descargado el Excel local; para añadirlo al Excel único de SharePoint configura un flujo/API.", "success");
+    showToast("Excel de respuestas generado.");
+    return;
+  }
+
+  try {
+    setBatchStatus("Enviando lote a SharePoint...", "");
+    const response = await fetch(sharePointBatchEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    state.finalized = true;
+    updateGenerateState();
+    setBatchStatus("Autodiagnóstico registrado en el Excel de SharePoint correctamente.", "success");
+    showToast("Enviado a SharePoint.");
+  } catch (error) {
+    downloadExcel(payload);
+    state.finalized = false;
+    updateGenerateState();
+    setBatchStatus("No se pudo enviar a SharePoint. Se ha descargado un Excel local de respaldo.", "error");
+    showToast("Envío no completado; Excel local generado.");
+  }
+}
+
 function renderAxisCards() {
   els.axisCards.innerHTML = axes
     .map(
@@ -507,7 +805,10 @@ function renderDataForm() {
     field.value = state.data[field.name] || "";
     field.addEventListener("input", () => {
       state.data[field.name] = field.value;
-      if (state.generated) renderResults();
+      state.finalized = false;
+      setBatchStatus("Al generar resultados se preparará el registro para el Excel de SharePoint.");
+      if (state.generated) renderResults({ scroll: false });
+      updateGenerateState();
     });
   });
 }
@@ -573,6 +874,8 @@ function onAnswer(event) {
   const questionId = input.dataset.question;
   state.answers[questionId] = Number(input.value);
   state.generated = false;
+  state.finalized = false;
+  setBatchStatus("Al generar resultados se preparará el registro para el Excel de SharePoint.");
 
   els.questionnaire.querySelectorAll(`input[data-question="${questionId}"]`).forEach((peer) => {
     peer.closest(".option-card").classList.toggle("is-selected", peer.checked);
@@ -589,7 +892,7 @@ function updateLiveState() {
   els.progressPercent.textContent = `${percent}%`;
   els.progressCount.textContent = `${current.completed} de ${current.total}`;
   els.progressBar.style.width = `${percent}%`;
-  els.generateButton.disabled = current.completed !== current.total;
+  updateGenerateState();
 
   axes.forEach((axis) => {
     const score = current.axisScores[axis.id];
@@ -620,14 +923,16 @@ function renderResultsPlaceholder() {
   els.axisResults.innerHTML = "";
 }
 
-function renderResults() {
+function renderResults(options = {}) {
+  const shouldScroll = options.scroll !== false;
   const current = scores();
   if (current.completed !== current.total) {
     showToast("Completa las 15 preguntas para generar resultados.");
-    return;
+    return false;
   }
 
   state.generated = true;
+  state.finalized = false;
   const level = globalLevel(current.global);
   const adminName = state.data.adminName || "Administración evaluada";
 
@@ -668,7 +973,24 @@ function renderResults() {
   renderLegend(true);
   renderRoadmap();
   renderUseCases();
-  document.getElementById("resultados").scrollIntoView({ behavior: "smooth", block: "start" });
+  updateGenerateState();
+  setBatchStatus("Resultados generados. Preparando registro en Excel...", "");
+  if (shouldScroll) document.getElementById("resultados").scrollIntoView({ behavior: "smooth", block: "start" });
+  return true;
+}
+
+async function generateAndRegisterResults() {
+  const contact = contactValidation();
+  if (!contact.ok) {
+    showToast(`Completa los datos de contacto: ${contact.missing.join(", ")}.`);
+    document.getElementById("datos").scrollIntoView({ behavior: "smooth", block: "start" });
+    setBatchStatus(`Faltan datos de contacto: ${contact.missing.join(", ")}.`, "error");
+    return;
+  }
+
+  const rendered = renderResults();
+  if (!rendered) return;
+  await registerAssessmentResult();
 }
 
 function buildInterpretation(current) {
@@ -866,9 +1188,11 @@ function buildResultsText() {
   const dataLines = [
     "Autodiagnóstico de Madurez · Administraciones Tributarias Inteligentes 2030",
     "",
+    `Nombre y apellidos: ${state.data.respondentName || "No indicado"}`,
+    `Organización: ${state.data.organization || "No indicada"}`,
+    `Correo electrónico: ${state.data.respondentEmail || "No indicado"}`,
     `Administración: ${state.data.adminName || "No indicada"}`,
     `Tipo: ${state.data.adminType || "No indicado"}`,
-    `Persona/área: ${state.data.respondent || "No indicado"}`,
     `Fecha: ${state.data.assessmentDate || "No indicada"}`,
     "",
     `Resultado global: ${formatScore(current.global)} · ${level.name}`,
@@ -911,11 +1235,14 @@ function resetAssessment() {
   state.answers = {};
   state.data = { assessmentDate: new Date().toISOString().slice(0, 10) };
   state.generated = false;
+  state.finalized = false;
   clearStoredAssessment();
   renderDataForm();
   renderQuestionnaire();
   updateLiveState();
   renderResultsPlaceholder();
+  setBatchStatus("Al generar resultados se preparará el registro para el Excel de SharePoint.");
+  updateGenerateState();
   showToast("Diagnóstico reiniciado.");
 }
 
@@ -938,7 +1265,7 @@ function init() {
   updateLiveState();
   renderResultsPlaceholder();
 
-  els.generateButton.addEventListener("click", renderResults);
+  els.generateButton.addEventListener("click", generateAndRegisterResults);
   els.resetButton.addEventListener("click", resetAssessment);
   els.exportPdfButton.addEventListener("click", exportPdf);
   els.exportButton.addEventListener("click", exportPdf);

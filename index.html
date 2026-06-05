@@ -73,12 +73,24 @@
 
       <section class="section data-section" id="datos" aria-labelledby="dataTitle">
         <div class="section-heading">
-          <p class="eyebrow">Datos básicos</p>
-          <h2 id="dataTitle">Administración evaluada</h2>
+          <p class="eyebrow">Datos de contacto</p>
+          <h2 id="dataTitle">Persona y organización que realizan el autodiagnóstico</h2>
         </div>
         <form class="data-form" id="basicDataForm">
           <label>
-            <span>Nombre de la administración</span>
+            <span>Nombre y apellidos</span>
+            <input id="respondentName" name="respondentName" type="text" placeholder="Ej. Daniela García" required />
+          </label>
+          <label>
+            <span>Organización a la que representa</span>
+            <input id="organization" name="organization" type="text" placeholder="Ej. Ayuntamiento de..." required />
+          </label>
+          <label>
+            <span>Correo electrónico</span>
+            <input id="respondentEmail" name="respondentEmail" type="email" placeholder="nombre@organizacion.es" required />
+          </label>
+          <label>
+            <span>Administración evaluada</span>
             <input id="adminName" name="adminName" type="text" placeholder="Ej. Agencia Tributaria Municipal" />
           </label>
           <label>
@@ -90,10 +102,6 @@
               <option>Estatal</option>
               <option>Otra</option>
             </select>
-          </label>
-          <label>
-            <span>Persona o área que responde</span>
-            <input id="respondent" name="respondent" type="text" placeholder="Ej. Dirección de transformación" />
           </label>
           <label>
             <span>Fecha</span>
@@ -122,8 +130,9 @@
               <span id="progressBar"></span>
             </div>
             <dl class="score-list" id="liveScoreList"></dl>
-            <button class="button primary full" id="generateButton" type="button" disabled>Generar resultados</button>
+            <button class="button primary full" id="generateButton" type="button" disabled>Generar resultados y registrar</button>
             <button class="button secondary full" id="exportButton" type="button">Exportar PDF</button>
+            <p class="batch-status" id="batchStatus">Al generar resultados se preparará el registro para el Excel de SharePoint.</p>
           </aside>
         </div>
       </section>
@@ -180,6 +189,11 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-    <script src="./app.js"></script>
+    <script>
+      window.SHAREPOINT_BATCH_ENDPOINT = "";
+      window.SHAREPOINT_FOLDER_URL = "https://everisgroup.sharepoint.com/sites/PublicFinanceTalentFoundation2/Documentos%20compartidos/Forms/AllItems.aspx?id=%2Fsites%2FPublicFinanceTalentFoundation2%2FDocumentos%20compartidos%2FPublic%20Finance%20%26%20Talent%20Foundation%2F20%20%2D%20%C3%81reas%20de%20conocimiento%2F20%20%2D%20Tributos%2F10%20%2D%20General%2F20%2E%20Info%20Foundation%20T%26C%2F01%2E%20Evento%20NTT%20Data%20Tributs%2F02%2E%20Evento%20Plataformas%20Trib%20Inteligentes&p=true&ct=1780660530309&or=Teams%2DHL&ga=1&LOF=1";
+      window.SHAREPOINT_WORKBOOK_NAME = "Autodiagnostico_Tributario_IA_2030_Respuestas.xlsx";
+    </script>
+    <script src="./app.js?v=sharepoint-batch-2"></script>
   </body>
 </html>

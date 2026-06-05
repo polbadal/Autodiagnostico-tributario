@@ -165,6 +165,12 @@ a {
   border-color: rgba(34, 211, 238, 0.26);
 }
 
+.button.success {
+  color: var(--night);
+  background: linear-gradient(135deg, var(--teal), var(--cyan));
+  box-shadow: 0 14px 34px rgba(20, 184, 166, 0.24);
+}
+
 .button:not(:disabled):hover {
   transform: translateY(-1px);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.25);
@@ -410,7 +416,7 @@ h4 {
 
 .data-form {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   padding: 18px;
 }
@@ -674,6 +680,29 @@ a:focus-visible {
   height: 100%;
   background: linear-gradient(90deg, var(--blue), var(--cyan), var(--teal));
   transition: width 180ms ease;
+}
+
+.batch-status {
+  margin: 0;
+  padding: 10px 11px;
+  color: var(--soft-text);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 12px;
+}
+
+.batch-status.is-success {
+  color: var(--night);
+  background: var(--cyan);
+  border-color: var(--cyan);
+  font-weight: 900;
+}
+
+.batch-status.is-error {
+  color: #fff;
+  background: rgba(251, 113, 133, 0.18);
+  border-color: rgba(251, 113, 133, 0.52);
 }
 
 .score-list {
